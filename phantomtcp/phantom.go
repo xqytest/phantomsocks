@@ -23,6 +23,10 @@ type Config struct {
 	Device string
 }
 
+// thphd 20211105: allow resolution of domains that are
+// not present in default.conf
+var default_config = Config{}
+
 var DomainMap map[string]Config
 
 var SubdomainDepth = 2
@@ -124,6 +128,11 @@ func ConfigLookup(name string) (Config, bool) {
 		offset++
 	}
 
+	// thphd 20211105: allow resolution of domains that are
+	// not present in default.conf
+	if default_config.Option != 0{
+		return default_config, true
+	}
 	return Config{0, 0, 0, 0, "", ""}, false
 }
 
@@ -458,6 +467,12 @@ func LoadConfig(filename string) error {
 							AAAACache.Store(keys[0], DomainIP{0, 0, nil})
 						} else {
 							DomainMap[keys[0]] = Config{option, minTTL, maxTTL, syncMSS, server, device}
+							// thphd 20211105: allow resolution of domains that are
+							// not present in default.conf
+							if keys[0]=="default.config.com" {
+								fmt.Println(keys[0], "used as default_config. ")
+								default_config = DomainMap[keys[0]]
+							}
 						}
 					} else {
 						if strings.Index(keys[0], "/") > 0 {

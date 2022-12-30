@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func DialConnInfo(laddr, raddr *net.TCPAddr, conf *Config, payload []byte) (net.Conn, *ConnectionInfo, error) {
+func DialConnInfo(laddr, raddr *net.TCPAddr, server *PhantomInterface, payload []byte) (net.Conn, *ConnectionInfo, error) {
 	var conn net.Conn
 	var err error
 
@@ -23,22 +23,22 @@ func DialConnInfo(laddr, raddr *net.TCPAddr, conf *Config, payload []byte) (net.
 		}()
 	}
 
-	AddConn(addr, conf.Option)
+	AddConn(addr, server.Hint)
 
-	if (conf.Option & (OPT_MSS | OPT_TFO | OPT_HTFO | OPT_KEEPALIVE)) != 0 {
+	if (server.Hint & (HINT_MSS | HINT_TFO | HINT_HTFO | HINT_KEEPALIVE)) != 0 {
 		d := net.Dialer{Timeout: timeout, LocalAddr: laddr,
 			Control: func(network, address string, c syscall.RawConn) error {
 				err := c.Control(func(fd uintptr) {
-					if (conf.Option & OPT_MSS) != 0 {
+					if (server.Hint & HINT_MSS) != 0 {
 						syscall.SetsockoptInt(int(fd),
-							syscall.SOL_TCP, syscall.TCP_MAXSEG, int(conf.MSS))
+							syscall.SOL_TCP, syscall.TCP_MAXSEG, int(server.MTU))
 					}
-					if (conf.Option & (OPT_TFO | OPT_HTFO)) != 0 {
+					if (server.Hint & (HINT_TFO | HINT_HTFO)) != 0 {
 						//syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, 30, 1)
 						syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TOS, tfo_id<<2)
-						syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TTL, int(conf.TTL))
+						syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TTL, int(server.TTL))
 					}
-					if (conf.Option & OPT_KEEPALIVE) != 0 {
+					if (server.Hint & HINT_KEEPALIVE) != 0 {
 						syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_KEEPALIVE, 1)
 					}
 				})
@@ -71,7 +71,7 @@ func DialConnInfo(laddr, raddr *net.TCPAddr, conf *Config, payload []byte) (net.
 	}
 	DelConn(raddr.String())
 
-	if (payload != nil) || (conf.MAXTTL != 0) {
+	if (payload != nil) || (server.MAXTTL != 0) {
 		if connInfo == nil {
 			conn.Close()
 			return nil, nil, nil
@@ -87,8 +87,8 @@ func DialConnInfo(laddr, raddr *net.TCPAddr, conf *Config, payload []byte) (net.
 			conn.Close()
 			return nil, nil, err
 		}
-		if conf.MAXTTL != 0 {
-			err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TTL, int(conf.MAXTTL))
+		if server.MAXTTL != 0 {
+			err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TTL, int(server.MAXTTL))
 		} else {
 			err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TTL, 64)
 		}
@@ -116,6 +116,9 @@ func GetOriginalDST(conn *net.TCPConn) (*net.TCPAddr, error) {
 
 	LocalAddr := conn.LocalAddr()
 	LocalTCPAddr, err := net.ResolveTCPAddr(LocalAddr.Network(), LocalAddr.String())
+	if err != nil {
+		return nil, err
+	}
 
 	if LocalTCPAddr.IP.To4() == nil {
 		mtuinfo, err := syscall.GetsockoptIPv6MTUInfo(int(file.Fd()), syscall.IPPROTO_IPV6, IP6T_SO_ORIGINAL_DST)
@@ -150,4 +153,47 @@ func GetOriginalDST(conn *net.TCPConn) (*net.TCPAddr, error) {
 
 		return &TCPAddr, nil
 	}
+}
+
+func SendWithOption(conn net.Conn, payload []byte, tos int, ttl int) error {
+	f, err := conn.(*net.TCPConn).File()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fd := int(f.Fd())
+	if tos != 0 {
+		err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TOS, tos)
+		if err != nil {
+			return err
+		}
+	}
+
+	if ttl != 0 {
+		err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TTL, ttl)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = conn.Write(payload)
+	if err != nil {
+		return err
+	}
+
+	if tos != 0 {
+		err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TOS, 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	if ttl != 0 {
+		err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TTL, 64)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

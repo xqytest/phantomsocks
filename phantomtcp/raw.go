@@ -1,10 +1,9 @@
-// +build linux
-// +build rawsocket
+//go:build linux && rawsocket
+// +build linux,rawsocket
 
 package phantomtcp
 
 import (
-	"encoding/binary"
 	"fmt"
 	"net"
 	"strconv"
@@ -15,35 +14,71 @@ import (
 	"github.com/google/gopacket/layers"
 )
 
+var HintMap = map[string]uint32{
+	"none": HINT_NONE,
+
+	"http":  HINT_HTTP,
+	"https": HINT_HTTPS,
+	"h3":    HINT_HTTP3,
+
+	"ipv4": HINT_IPV4,
+	"ipv6": HINT_IPV6,
+
+	"move":     HINT_MOVE,
+	"strip":    HINT_STRIP,
+	"fronting": HINT_FRONTING,
+
+	"ttl":    HINT_TTL,
+	"mss":    HINT_MSS,
+	"w-md5":  HINT_WMD5,
+	"n-ack":  HINT_NACK,
+	"w-ack":  HINT_WACK,
+	"w-csum": HINT_WCSUM,
+	"w-seq":  HINT_WSEQ,
+
+	"udp":    HINT_UDP,
+	"no-tcp": HINT_NOTCP,
+	"delay":  HINT_DELAY,
+
+	"mode2":      HINT_MODE2,
+	"df":         HINT_DF,
+	"sat":        HINT_SAT,
+	"rand":       HINT_RAND,
+	"s-seg":      HINT_SSEG,
+	"1-seg":      HINT_1SEG,
+	"half-tfo":   HINT_HTFO,
+	"keep-alive": HINT_KEEPALIVE,
+	"synx2":      HINT_SYNX2,
+	"zero":       HINT_ZERO,
+}
+
 func DevicePrint() {
 }
 
 func connectionMonitor(device string, ipv6 bool) {
-	fmt.Printf("Device: %v\n", device)
-
 	var err error
 	localaddr, err := GetLocalAddr(device, ipv6)
 	if err != nil {
-		logPrintln(1, err)
+		logPrintln(1, device, err)
 		return
 	}
 
 	var handle *net.IPConn
 	if ipv6 {
 		if localaddr == nil {
-			logPrintln(1, "no IPv6 on", device)
+			logPrintln(1, "Device:", device, "no IPv6")
 			return
 		}
-		netaddr, _ := net.ResolveIPAddr("ip6", localaddr.IP.String())
-		handle, err = net.ListenIP("ip6:tcp", netaddr)
+		handle, err = net.ListenIP("ip6:tcp", &net.IPAddr{IP: localaddr.IP, Zone: ""})
 	} else {
 		if localaddr == nil {
-			logPrintln(1, "no IPv4 on", device)
+			logPrintln(1, "Device:", device, "no IPv4")
 			return
 		}
-		netaddr, _ := net.ResolveIPAddr("ip4", localaddr.IP.String())
-		handle, err = net.ListenIP("ip4:tcp", netaddr)
+		handle, err = net.ListenIP("ip4:tcp", &net.IPAddr{IP: localaddr.IP, Zone: ""})
 	}
+
+	fmt.Printf("Device: %v (%s)\n", device, localaddr.IP.String())
 
 	if err != nil {
 		fmt.Printf("sockraw open failed: %v", err)
@@ -58,14 +93,12 @@ func connectionMonitor(device string, ipv6 bool) {
 			logPrintln(1, err)
 			continue
 		}
-
-		var tcp layers.TCP
-
-		tcp.DecodeFromBytes(buf[:n], nil)
-
-		if tcp.SYN != true {
+		if buf[13] != 18 {
 			continue
 		}
+
+		var tcp layers.TCP
+		tcp.DecodeFromBytes(buf[:n], gopacket.NilDecodeFeedback)
 		srcPort := tcp.DstPort
 		synAddr := net.JoinHostPort(addr.String(), strconv.Itoa(int(tcp.SrcPort)))
 		_, ok := ConnSyn.Load(synAddr)
@@ -136,26 +169,117 @@ func connectionMonitor(device string, ipv6 bool) {
 	}
 }
 
+func ICMPMonitor(device string, ipv6 bool) {
+	fmt.Printf("Device: %v\n", device)
+
+	var err error
+	localaddr, err := GetLocalAddr(device, ipv6)
+	if err != nil {
+		logPrintln(1, err)
+		return
+	}
+
+	var handle *net.IPConn
+	if ipv6 {
+		if localaddr == nil {
+			logPrintln(1, "no IPv6 on", device)
+			return
+		}
+		handle, err = net.ListenIP("ip6:icmp", &net.IPAddr{IP: localaddr.IP, Zone: ""})
+	} else {
+		if localaddr == nil {
+			logPrintln(1, "no IPv4 on", device)
+			return
+		}
+		handle, err = net.ListenIP("ip4:icmp", &net.IPAddr{IP: localaddr.IP, Zone: ""})
+	}
+
+	if err != nil {
+		fmt.Printf("sockraw open failed: %v", err)
+		return
+	}
+	defer handle.Close()
+
+	var connInfo ConnectionInfo
+	data := make([]byte, 1500)
+	fakepayload := make([]byte, 1024)
+	df := gopacket.NilDecodeFeedback
+	for {
+		n, _, err := handle.ReadFrom(data)
+		if err != nil {
+			logPrintln(1, err)
+			continue
+		}
+		if len(data) < 8 || !(data[0] == 11 && data[1] == 0) {
+			continue
+		}
+
+		if ipv6 {
+			var icmp layers.ICMPv6
+			icmp.DecodeFromBytes(data[:n], df)
+			var ip layers.IPv6
+			if ip.DecodeFromBytes(icmp.Payload, df) == nil && ip.NextHeader == layers.IPProtocolTCP && ip.TrafficClass > 0 {
+				var tcp layers.TCP
+				if tcp.DecodeFromBytes(ip.Payload, df) == nil {
+					ip.TrafficClass = 0
+					connInfo.IP = &ip
+					connInfo.TCP = tcp
+					ttl := uint8(64)
+					if ip.TrafficClass > 4 {
+						ttl = ip.TrafficClass >> 2
+					}
+					ModifyAndSendPacket(&connInfo, fakepayload, HINT_TTL|HINT_WMD5, ttl, 2)
+					ModifyAndSendPacket(&connInfo, connInfo.TCP.Payload, HINT_TTL, 64, 1)
+				}
+			}
+		} else {
+			var icmp layers.ICMPv4
+			icmp.DecodeFromBytes(data[:n], df)
+			var ip layers.IPv4
+			if ip.DecodeFromBytes(icmp.Payload, df) == nil && ip.Protocol == layers.IPProtocolTCP && ip.TOS > 0 {
+				var tcp layers.TCP
+				if tcp.DecodeFromBytes(ip.Payload, df) == nil {
+					ip.TOS = 0
+					connInfo.IP = &ip
+					connInfo.TCP = tcp
+					ttl := uint8(64)
+					if ip.TOS > 4 {
+						ttl = ip.TOS >> 2
+					}
+					ModifyAndSendPacket(&connInfo, fakepayload, HINT_TTL|HINT_WMD5, ttl, 2)
+					ModifyAndSendPacket(&connInfo, connInfo.TCP.Payload, HINT_TTL, 64, 1)
+				}
+			}
+		}
+	}
+}
+
 func ConnectionMonitor(devices []string) bool {
 	if devices == nil {
 		DevicePrint()
 		return false
 	}
 
-	for i := 0; i < 65536; i++ {
-		ConnInfo4[i] = make(chan *ConnectionInfo)
-		ConnInfo6[i] = make(chan *ConnectionInfo)
-	}
+	if PassiveMode {
+		for i := 0; i < len(devices); i++ {
+			go ICMPMonitor(devices[i], false)
+		}
+	} else {
+		for i := 0; i < 65536; i++ {
+			ConnInfo4[i] = make(chan *ConnectionInfo)
+			ConnInfo6[i] = make(chan *ConnectionInfo)
+		}
 
-	for i := 0; i < len(devices); i++ {
-		go connectionMonitor(devices[i], true)
-		go connectionMonitor(devices[i], false)
+		for i := 0; i < len(devices); i++ {
+			go connectionMonitor(devices[i], false)
+			go connectionMonitor(devices[i], true)
+		}
 	}
 
 	return true
 }
 
-func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32, ttl uint8, count int) error {
+func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, hint uint32, ttl uint8, count int) error {
 	ipLayer := connInfo.IP
 
 	tcpLayer := &layers.TCP{
@@ -169,20 +293,20 @@ func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32
 		Window:     connInfo.TCP.Window,
 	}
 
-	if method&OPT_WMD5 != 0 {
+	if hint&HINT_WMD5 != 0 {
 		tcpLayer.Options = []layers.TCPOption{
 			layers.TCPOption{19, 16, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
 		}
-	} else if method&OPT_WTIME != 0 {
+	} else if hint&HINT_WTIME != 0 {
 		tcpLayer.Options = []layers.TCPOption{
 			layers.TCPOption{8, 8, []byte{0, 0, 0, 0, 0, 0, 0, 0}},
 		}
 	}
 
-	if method&OPT_NACK != 0 {
+	if hint&HINT_NACK != 0 {
 		tcpLayer.ACK = false
 		tcpLayer.Ack = 0
-	} else if method&OPT_WACK != 0 {
+	} else if hint&HINT_WACK != 0 {
 		tcpLayer.Ack += uint32(tcpLayer.Window)
 	}
 
@@ -191,11 +315,11 @@ func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32
 	var options gopacket.SerializeOptions
 	options.FixLengths = true
 
-	if method&OPT_WCSUM == 0 {
+	if hint&HINT_WCSUM == 0 {
 		options.ComputeChecksums = true
 	}
 
-	if method&OPT_WSEQ != 0 {
+	if hint&HINT_WSEQ != 0 {
 		tcpLayer.Seq--
 		fakepayload := make([]byte, len(payload)+1)
 		fakepayload[0] = 0xFF
@@ -203,112 +327,50 @@ func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32
 		payload = fakepayload
 	}
 
-	tcpLayer.SetNetworkLayerForChecksum(ipLayer)
-	var sa syscall.Sockaddr
-	var domain int
-
+	var network string
+	var laddr net.IPAddr
+	var raddr net.IPAddr
 	switch ip := ipLayer.(type) {
 	case *layers.IPv4:
-		if method&OPT_TTL != 0 {
-			ip.TTL = ttl
-		}
-		gopacket.SerializeLayers(buffer, options,
-			ip, tcpLayer, gopacket.Payload(payload),
-		)
-		var addr [4]byte
-		copy(addr[:4], ip.DstIP.To4()[:4])
-		sa = &syscall.SockaddrInet4{Addr: addr, Port: 0}
-		domain = syscall.AF_INET
+		laddr = net.IPAddr{ip.SrcIP, ""}
+		raddr = net.IPAddr{ip.DstIP, ""}
+		network = "ip4:tcp"
 	case *layers.IPv6:
-		if method&OPT_TTL != 0 {
-			ip.HopLimit = ttl
-		}
-		gopacket.SerializeLayers(buffer, options,
-			ip, tcpLayer, gopacket.Payload(payload),
-		)
-		var addr [16]byte
-		copy(addr[:16], ip.DstIP[:16])
-		sa = &syscall.SockaddrInet6{Addr: addr, Port: 0}
-		domain = syscall.AF_INET6
+		laddr = net.IPAddr{ip.SrcIP, ""}
+		raddr = net.IPAddr{ip.DstIP, ""}
+		network = "ip6:tcp"
 	}
 
-	raw_fd, err := syscall.Socket(domain, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
+	conn, err := net.DialIP(network, &laddr, &raddr)
 	if err != nil {
-		syscall.Close(raw_fd)
 		return err
 	}
-	outgoingPacket := buffer.Bytes()
+	defer conn.Close()
 
-	for i := 0; i < count; i++ {
-		err = syscall.Sendto(raw_fd, outgoingPacket, 0, sa)
+	if hint&HINT_TTL != 0 {
+		f, err := conn.File()
 		if err != nil {
-			syscall.Close(raw_fd)
+			return err
+		}
+		defer f.Close()
+		fd := int(f.Fd())
+		err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_TTL, int(ttl))
+		if err != nil {
 			return err
 		}
 	}
-	syscall.Close(raw_fd)
 
-	return nil
-}
-
-func SendJumboUDPPacket(laddr, raddr *net.UDPAddr, payload []byte) error {
-	var sa syscall.Sockaddr
-	var lsa syscall.Sockaddr
-	var domain int
-
-	var outgoingPacket [9000]byte
-	packetsize := len(payload)
-	ip4 := raddr.IP.To4()
-	if ip4 != nil {
-		copy(outgoingPacket[:], []byte{69, 0, 0, 0, 141, 152, 64, 0, 64, 17, 0, 0})
-		packetsize += 8
-		//binary.BigEndian.PutUint16(outgoingPacket[24:], uint16(packetsize))
-		binary.BigEndian.PutUint16(outgoingPacket[24:], uint16(0))
-		packetsize += 20
-		binary.BigEndian.PutUint16(outgoingPacket[2:], uint16(packetsize))
-		copy(outgoingPacket[12:], laddr.IP.To4())
-		copy(outgoingPacket[16:], ip4)
-		binary.BigEndian.PutUint16(outgoingPacket[20:], uint16(laddr.Port))
-		binary.BigEndian.PutUint16(outgoingPacket[22:], uint16(raddr.Port))
-		copy(outgoingPacket[28:], payload)
-
-		binary.BigEndian.PutUint16(outgoingPacket[26:], ComputeUDPChecksum(outgoingPacket[:packetsize]))
-
-		var ip [4]byte
-		copy(ip[:], ip4)
-		sa = &syscall.SockaddrInet4{Addr: ip, Port: 0}
-		copy(ip[:], laddr.IP.To4())
-		lsa = &syscall.SockaddrInet4{Addr: ip, Port: 0}
-		domain = syscall.AF_INET
-	} else {
-		var ip [16]byte
-		copy(ip[:], raddr.IP.To16())
-		sa = &syscall.SockaddrInet6{Addr: ip, Port: 0}
-		copy(ip[:], laddr.IP.To16())
-		lsa = &syscall.SockaddrInet6{Addr: ip, Port: 0}
-		domain = syscall.AF_INET6
-	}
-
-	raw_fd, err := syscall.Socket(domain, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
-	if err != nil {
-		syscall.Close(raw_fd)
-		return err
-	}
-	err = syscall.Bind(raw_fd, lsa)
-	if err != nil {
-		syscall.Close(raw_fd)
-		return err
-	}
-
-	err = syscall.Sendto(raw_fd, outgoingPacket[:packetsize], 0, sa)
-	syscall.Close(raw_fd)
-	if err != nil {
-		return err
+	tcpLayer.SetNetworkLayerForChecksum(ipLayer)
+	gopacket.SerializeLayers(buffer, options,
+		tcpLayer, gopacket.Payload(payload),
+	)
+	outgoingPacket := buffer.Bytes()
+	for i := 0; i < count; i++ {
+		_, err = conn.Write(outgoingPacket)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
-}
-
-func UDPMonitor(devices []string) bool {
-	return true
 }

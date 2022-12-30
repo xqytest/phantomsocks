@@ -1,5 +1,5 @@
-// +build !rawsocket
-// +build !windivert
+//go:build pcap
+// +build pcap
 
 package phantomtcp
 
@@ -14,6 +14,47 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
+var HintMap = map[string]uint32{
+	"none": HINT_NONE,
+
+	"http":  HINT_HTTP,
+	"https": HINT_HTTPS,
+	"h3":    HINT_HTTP3,
+
+	"ipv4": HINT_IPV4,
+	"ipv6": HINT_IPV6,
+
+	"move":     HINT_MOVE,
+	"strip":    HINT_STRIP,
+	"fronting": HINT_FRONTING,
+
+	"ttl":    HINT_TTL,
+	"mss":    HINT_MSS,
+	"w-md5":  HINT_WMD5,
+	"n-ack":  HINT_NACK,
+	"w-csum": HINT_WCSUM,
+	"w-seq":  HINT_WSEQ,
+	"w-time": HINT_WTIME,
+
+	"tfo":    HINT_TFO,
+	"udp":    HINT_UDP,
+	"no-tcp": HINT_NOTCP,
+	"delay":  HINT_DELAY,
+
+	"mode2":      HINT_MODE2,
+	"df":         HINT_DF,
+	"sat":        HINT_SAT,
+	"rand":       HINT_RAND,
+	"s-seg":      HINT_SSEG,
+	"1-seg":      HINT_1SEG,
+	"half-tfo":   HINT_HTFO,
+	"keep-alive": HINT_KEEPALIVE,
+	"synx2":      HINT_SYNX2,
+	"zero":       HINT_ZERO,
+}
+
+var ConnWait4 [65536]uint32
+var ConnWait6 [65536]uint32
 var pcapHandle *pcap.Handle
 
 func DevicePrint() {
@@ -72,10 +113,10 @@ func connectionMonitor(device string) {
 		case *layers.IPv4:
 			var srcPort layers.TCPPort
 			var synAddr string
-			var method uint32 = 0
+			var hint uint32 = 0
 			if synack {
-				method = ConnWait4[tcp.DstPort]
-				if method == 0 {
+				hint = ConnWait4[tcp.DstPort]
+				if hint == 0 {
 					continue
 				}
 				srcPort = tcp.DstPort
@@ -88,11 +129,11 @@ func connectionMonitor(device string) {
 				result, ok := ConnSyn.Load(synAddr)
 				if ok {
 					info := result.(SynInfo)
-					method = info.Option
+					hint = info.Option
 				}
 			}
 
-			if method != 0 {
+			if hint != 0 {
 				if synack {
 					srcIP := ip.DstIP
 					ip.DstIP = ip.SrcIP
@@ -120,9 +161,9 @@ func connectionMonitor(device string) {
 					connInfo = &ConnectionInfo{nil, ip, *tcp}
 				}
 
-				if method&(OPT_TFO|OPT_HTFO|OPT_SYNX2) != 0 {
+				if hint&(HINT_TFO|HINT_HTFO|HINT_SYNX2) != 0 {
 					if synack {
-						if method&(OPT_TFO|OPT_HTFO) != 0 {
+						if hint&(HINT_TFO|HINT_HTFO) != 0 {
 							for _, op := range tcp.Options {
 								if op.OptionType == 34 {
 									TFOCookies.Store(ip.DstIP.String(), op.OptionData)
@@ -130,10 +171,10 @@ func connectionMonitor(device string) {
 							}
 						}
 						ConnWait4[srcPort] = 0
-					} else if method&(OPT_TFO|OPT_HTFO) != 0 {
+					} else if hint&(HINT_TFO|HINT_HTFO) != 0 {
 						if ip.TTL < 64 {
 							count := 1
-							if method&OPT_SYNX2 != 0 {
+							if hint&HINT_SYNX2 != 0 {
 								count = 2
 							}
 
@@ -142,18 +183,18 @@ func connectionMonitor(device string) {
 								payload := TFOPayload[ip.TOS>>2]
 								if payload != nil {
 									ip.TOS = 0
-									ModifyAndSendPacket(connInfo, payload, OPT_TFO, 0, count)
-									ConnWait4[srcPort] = method
+									ModifyAndSendPacket(connInfo, payload, HINT_TFO, 0, count)
+									ConnWait4[srcPort] = hint
 								} else {
 									connInfo = nil
 								}
 							} else {
 								ip.TOS = 0
-								ModifyAndSendPacket(connInfo, nil, OPT_TFO, 0, count)
+								ModifyAndSendPacket(connInfo, nil, HINT_TFO, 0, count)
 								connInfo = nil
 							}
 						}
-					} else if method&OPT_SYNX2 != 0 {
+					} else if hint&HINT_SYNX2 != 0 {
 						SendPacket(packet)
 					}
 				}
@@ -168,10 +209,10 @@ func connectionMonitor(device string) {
 		case *layers.IPv6:
 			var srcPort layers.TCPPort
 			var synAddr string
-			var method uint32 = 0
+			var hint uint32 = 0
 			if synack {
-				method = ConnWait6[tcp.DstPort]
-				if method == 0 {
+				hint = ConnWait6[tcp.DstPort]
+				if hint == 0 {
 					continue
 				}
 				srcPort = tcp.DstPort
@@ -184,10 +225,10 @@ func connectionMonitor(device string) {
 				result, ok := ConnSyn.Load(synAddr)
 				if ok {
 					info := result.(SynInfo)
-					method = info.Option
+					hint = info.Option
 				}
 			}
-			if method != 0 {
+			if hint != 0 {
 				if synack {
 					srcIP := ip.DstIP
 					ip.DstIP = ip.SrcIP
@@ -215,9 +256,9 @@ func connectionMonitor(device string) {
 					connInfo = &ConnectionInfo{nil, ip, *tcp}
 				}
 
-				if method&(OPT_TFO|OPT_HTFO|OPT_SYNX2) != 0 {
+				if hint&(HINT_TFO|HINT_HTFO|HINT_SYNX2) != 0 {
 					if synack {
-						if method&(OPT_TFO|OPT_HTFO) != 0 {
+						if hint&(HINT_TFO|HINT_HTFO) != 0 {
 							for _, op := range tcp.Options {
 								if op.OptionType == 34 {
 									TFOCookies.Store(ip.DstIP.String(), op.OptionData)
@@ -225,10 +266,10 @@ func connectionMonitor(device string) {
 							}
 						}
 						ConnWait6[srcPort] = 0
-					} else if method&(OPT_TFO|OPT_HTFO) != 0 {
+					} else if hint&(HINT_TFO|HINT_HTFO) != 0 {
 						if ip.HopLimit < 64 {
 							count := 1
-							if method&OPT_SYNX2 != 0 {
+							if hint&HINT_SYNX2 != 0 {
 								count = 2
 							}
 
@@ -237,18 +278,18 @@ func connectionMonitor(device string) {
 								payload := TFOPayload[ip.TrafficClass>>2]
 								if payload != nil {
 									ip.TrafficClass = 0
-									ModifyAndSendPacket(connInfo, payload, OPT_TFO, 0, count)
-									ConnWait4[srcPort] = method
+									ModifyAndSendPacket(connInfo, payload, HINT_TFO, 0, count)
+									ConnWait4[srcPort] = hint
 								} else {
 									connInfo = nil
 								}
 							} else {
 								ip.TrafficClass = 0
-								ModifyAndSendPacket(connInfo, nil, OPT_TFO, 0, count)
+								ModifyAndSendPacket(connInfo, nil, HINT_TFO, 0, count)
 								connInfo = nil
 							}
 						}
-					} else if method&OPT_SYNX2 != 0 {
+					} else if hint&HINT_SYNX2 != 0 {
 						SendPacket(packet)
 					}
 				}
@@ -259,51 +300,6 @@ func connectionMonitor(device string) {
 					case <-time.After(time.Second * 2):
 					}
 				}(connInfo)
-			}
-		}
-	}
-}
-
-func udpMonitor(device string) {
-	fmt.Printf("Device: %v (UDP)\n", device)
-
-	snapLen := int32(65535)
-
-	filter := "net 6.0.0.0/8 and udp port 443"
-
-	var err error
-	pcapHandle, err = pcap.OpenLive(device, snapLen, true, pcap.BlockForever)
-	if err != nil {
-		fmt.Printf("pcap open live failed: %v", err)
-		return
-	}
-
-	if err = pcapHandle.SetBPFFilter(filter); err != nil {
-		fmt.Printf("set bpf filter failed: %v", err)
-		return
-	}
-	defer pcapHandle.Close()
-
-	packetSource := gopacket.NewPacketSource(pcapHandle, pcapHandle.LinkType())
-	packetSource.NoCopy = false
-	for {
-		packet, err := packetSource.NextPacket()
-		if err != nil {
-			logPrintln(1, err)
-			continue
-		}
-
-		//link := packet.LinkLayer()
-		network := packet.NetworkLayer()
-		transport := packet.TransportLayer()
-
-		switch network := network.(type) {
-		case *layers.IPv4:
-			switch transport := transport.(type) {
-			case *layers.UDP:
-				src := net.UDPAddr{IP: network.SrcIP, Port: int(transport.SrcPort)}
-				dst := net.UDPAddr{IP: network.DstIP, Port: int(transport.DstPort)}
-				logPrintln(1, src, "->", dst)
 			}
 		}
 	}
@@ -322,14 +318,6 @@ func ConnectionMonitor(devices []string) bool {
 
 	for i := 0; i < len(devices); i++ {
 		go connectionMonitor(devices[i])
-	}
-
-	return true
-}
-
-func UDPMonitor(devices []string) bool {
-	for i := 0; i < len(devices); i++ {
-		go udpMonitor(devices[i])
 	}
 
 	return true

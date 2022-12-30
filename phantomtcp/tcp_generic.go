@@ -1,3 +1,6 @@
+//go:build !linux && !windows
+// +build !linux,!windows
+
 package phantomtcp
 
 import (
@@ -5,10 +8,10 @@ import (
 	"time"
 )
 
-func DialConnInfo(laddr, raddr *net.TCPAddr, conf *Config, payload []byte) (net.Conn, *ConnectionInfo, error) {
+func DialConnInfo(laddr, raddr *net.TCPAddr, conf *PhantomInterface, payload []byte) (net.Conn, *ConnectionInfo, error) {
 	addr := raddr.String()
 
-	AddConn(addr, conf.Option)
+	AddConn(addr, conf.Hint)
 	timeout := time.Millisecond * 1500
 	d := net.Dialer{Timeout: timeout, LocalAddr: laddr}
 	conn, err := d.Dial("tcp", addr)
@@ -53,4 +56,8 @@ func GetOriginalDST(conn *net.TCPConn) (*net.TCPAddr, error) {
 	}
 
 	return LocalTCPAddr, err
+}
+
+func SendWithOption(conn net.Conn, payload []byte, tos, ttl int) error {
+	return nil
 }

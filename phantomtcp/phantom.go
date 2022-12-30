@@ -14,104 +14,140 @@ import (
 	"strings"
 )
 
-type Config struct {
-	Option uint32
-	TTL    byte
-	MAXTTL byte
-	MSS    uint16
-	Server string
-	Device string
+type ServiceConfig struct {
+	Name       string `json:"name,omitempty"`
+	Device     string `json:"device,omitempty"`
+	MTU        int    `json:"mtu,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+	Address    string `json:"address,omitempty"`
+	PrivateKey string `json:"privatekey,omitempty"`
+	Profile    string `json:"profile,omitempty"`
+
+	Peers []Peer `json:"peers,omitempty"`
 }
 
+type InterfaceConfig struct {
+	Name   string `json:"name,omitempty"`
+	Device string `json:"device,omitempty"`
+	DNS    string `json:"dns,omitempty"`
+	Hint   string `json:"hint,omitempty"`
+	MTU    int    `json:"mtu,omitempty"`
+	TTL    int    `json:"ttl,omitempty"`
+	MAXTTL int    `json:"maxttl,omitempty"`
+
+	Protocol   string `json:"protocol,omitempty"`
+	Address    string `json:"address,omitempty"`
+	PrivateKey string `json:"privatekey,omitempty"`
+
+	Peers []Peer `json:"peers,omitempty"`
+}
+
+type Peer struct {
+	PublicKey    string `json:"publickey,omitempty"`
+	PreSharedKey string `json:"presharedkey,omitempty"`
+	Endpoint     string `json:"endpoint,omitempty"`
+	KeepAlive    int    `json:"keepalive,omitempty"`
+	AllowedIPs   string `json:"allowedips,omitempty"`
+}
+
+const (
+	DIRECT   = 0x0
+	REDIRECT = 0x1
+	NAT64    = 0x2
+	HTTP     = 0x3
+	HTTPS    = 0x4
+	SOCKS4   = 0x5
+	SOCKS5   = 0x6
+)
+
+type PhantomInterface struct {
+	Device string
+	DNS    string
+	Hint   uint32
+	MTU    uint16
+	TTL    byte
+	MAXTTL byte
+
+	Protocol byte
+	Address  string
+}
+
+<<<<<<< HEAD
 // thphd 20211105: allow resolution of domains that are
 // not present in default.conf
 var default_config = Config{}
 
 var DomainMap map[string]Config
+=======
+type PhantomProfile struct {
+	DomainMap map[string]*PhantomInterface
+}
+var DefaultProfile *PhantomProfile = nil
+var DefaultInterface *PhantomInterface = nil
+>>>>>>> 14291e2c889efb4fba5ead598acbb31d0077f948
 
 var SubdomainDepth = 2
 var LogLevel = 0
 var Forward bool = false
+var PassiveMode = false
 
 const (
-	OPT_NONE  = 0x0
-	OPT_TTL   = 0x1 << 0
-	OPT_MSS   = 0x1 << 1
-	OPT_WMD5  = 0x1 << 2
-	OPT_NACK  = 0x1 << 3
-	OPT_WACK  = 0x1 << 4
-	OPT_WCSUM = 0x1 << 5
-	OPT_WSEQ  = 0x1 << 6
-	OPT_WTIME = 0x1 << 7
+	HINT_NONE = 0x0
 
-	OPT_TFO       = 0x1 << 8
-	OPT_HTFO      = 0x1 << 9
-	OPT_KEEPALIVE = 0x1 << 10
-	OPT_SYNX2     = 0x1 << 11
+	HINT_ALPN  = 0x1 << 1
+	HINT_HTTP  = 0x1 << 2
+	HINT_HTTPS = 0x1 << 3
+	HINT_HTTP3 = 0x1 << 4
 
-	OPT_HTTP  = 0x1 << 16
-	OPT_HTTPS = 0x1 << 17
-	OPT_MOVE  = 0x1 << 18
-	OPT_STRIP = 0x1 << 19
-	OPT_IPV4  = 0x1 << 20
-	OPT_IPV6  = 0x1 << 21
-	OPT_MODE2 = 0x1 << 22
-	OPT_DF    = 0x1 << 23
-	OPT_SAT   = 0x1 << 24
-	OPT_RAND  = 0x1 << 25
-	OPT_SSEG  = 0x1 << 26
-	OPT_1SEG  = 0x1 << 27
+	HINT_IPV4 = 0x1 << 5
+	HINT_IPV6 = 0x1 << 6
 
-	OPT_PROXY = 0x1 << 31
+	HINT_MOVE     = 0x1 << 7
+	HINT_STRIP    = 0x1 << 8
+	HINT_FRONTING = 0x1 << 9
+
+	HINT_TTL   = 0x1 << 10
+	HINT_MSS   = 0x1 << 11
+	HINT_WMD5  = 0x1 << 12
+	HINT_NACK  = 0x1 << 13
+	HINT_WACK  = 0x1 << 14
+	HINT_WCSUM = 0x1 << 15
+	HINT_WSEQ  = 0x1 << 16
+	HINT_WTIME = 0x1 << 17
+
+	HINT_TFO   = 0x1 << 18
+	HINT_UDP   = 0x1 << 19
+	HINT_NOTCP = 0x1 << 20
+	HINT_DELAY = 0x1 << 21
+
+	HINT_MODE2     = 0x1 << 22
+	HINT_DF        = 0x1 << 23
+	HINT_SAT       = 0x1 << 24
+	HINT_RAND      = 0x1 << 25
+	HINT_SSEG      = 0x1 << 26
+	HINT_1SEG      = 0x1 << 27
+	HINT_HTFO      = 0x1 << 28
+	HINT_KEEPALIVE = 0x1 << 29
+	HINT_SYNX2     = 0x1 << 30
+	HINT_ZERO      = 0x1 << 31
 )
 
-const OPT_FAKE = OPT_TTL | OPT_WMD5 | OPT_NACK | OPT_WACK | OPT_WCSUM | OPT_WSEQ | OPT_WTIME
-const OPT_MODIFY = OPT_FAKE | OPT_SSEG | OPT_TFO | OPT_HTFO | OPT_MODE2
-
-var MethodMap = map[string]uint32{
-	"none":   OPT_NONE,
-	"ttl":    OPT_TTL,
-	"mss":    OPT_MSS,
-	"w-md5":  OPT_WMD5,
-	"n-ack":  OPT_NACK,
-	"w-ack":  OPT_WACK,
-	"w-csum": OPT_WCSUM,
-	"w-seq":  OPT_WSEQ,
-	"w-time": OPT_WTIME,
-
-	"tfo":        OPT_TFO,
-	"half-tfo":   OPT_HTFO,
-	"keep-alive": OPT_KEEPALIVE,
-	"synx2":      OPT_SYNX2,
-
-	"http":  OPT_HTTP,
-	"https": OPT_HTTPS,
-	"move":  OPT_MOVE,
-	"strip": OPT_STRIP,
-	"ipv4":  OPT_IPV4,
-	"ipv6":  OPT_IPV6,
-	"mode2": OPT_MODE2,
-	"df":    OPT_DF,
-	"sat":   OPT_SAT,
-	"rand":  OPT_RAND,
-	"s-seg": OPT_SSEG,
-	"1-seg": OPT_1SEG,
-
-	"proxy": OPT_PROXY,
-}
+const HINT_DNS = HINT_ALPN | HINT_HTTP | HINT_HTTPS | HINT_HTTP3 | HINT_IPV4 | HINT_IPV6
+const HINT_FAKE = HINT_TTL | HINT_WMD5 | HINT_NACK | HINT_WACK | HINT_WCSUM | HINT_WSEQ | HINT_WTIME
+const HINT_MODIFY = HINT_FAKE | HINT_SSEG | HINT_TFO | HINT_HTFO | HINT_MODE2
 
 var Logger *log.Logger
 
 func logPrintln(level int, v ...interface{}) {
 	if LogLevel >= level {
-		fmt.Println(v)
+		fmt.Println(v...)
 	}
 }
 
-func ConfigLookup(name string) (Config, bool) {
-	config, ok := DomainMap[name]
+func (profile *PhantomProfile) GetInterface(name string) *PhantomInterface {
+	config, ok := profile.DomainMap[name]
 	if ok {
-		return config, true
+		return config
 	}
 
 	offset := 0
@@ -121,20 +157,35 @@ func ConfigLookup(name string) (Config, bool) {
 			break
 		}
 		offset += off
-		config, ok = DomainMap[name[offset:]]
+		config, ok = profile.DomainMap[name[offset:]]
 		if ok {
-			return config, true
+			return config
 		}
 		offset++
 	}
 
+<<<<<<< HEAD
 	// thphd 20211105: allow resolution of domains that are
 	// not present in default.conf
 	if default_config.Option != 0{
 		return default_config, true
 	}
 	return Config{0, 0, 0, 0, "", ""}, false
+=======
+	return DefaultInterface
+>>>>>>> 14291e2c889efb4fba5ead598acbb31d0077f948
 }
+
+/*
+func (profile *PhantomProfile) GetInterface(name string) *PhantomInterface {
+	config, ok := profile.DomainMap[name]
+	if ok {
+		return config
+	}
+
+	return DefaultInterface
+}
+*/
 
 func GetHost(b []byte) (offset int, length int) {
 	offset = bytes.Index(b, []byte("Host: "))
@@ -205,13 +256,91 @@ func GetSNI(b []byte) (offset int, length int) {
 	return 0, 0
 }
 
+func GetQUICSNI(b []byte) string {
+	if b[0] == 0x0d {
+		if !(len(b) > 23 && string(b[9:13]) == "Q043") {
+			return ""
+		}
+		if !(len(b) > 26 && b[26] == 0xa0) {
+			return ""
+		}
+
+		if !(len(b) > 38 && string(b[30:34]) == "CHLO") {
+			return ""
+		}
+		TagNum := int(binary.LittleEndian.Uint16(b[34:36]))
+
+		BaseOffset := 38 + 8*TagNum
+		if !(len(b) > BaseOffset) {
+			return ""
+		}
+
+		var SNIOffset uint16 = 0
+		for i := 0; i < TagNum; i++ {
+			offset := 38 + i*8
+			TagName := b[offset : offset+4]
+			OffsetEnd := binary.LittleEndian.Uint16(b[offset+4 : offset+6])
+			if bytes.Equal(TagName, []byte{'S', 'N', 'I', 0}) {
+				if len(b[BaseOffset:]) < int(OffsetEnd) {
+					return ""
+				}
+				return string(b[BaseOffset:][SNIOffset:OffsetEnd])
+			} else {
+				SNIOffset = OffsetEnd
+			}
+		}
+	} else if b[0]&0xc0 == 0xc0 {
+		if !(len(b) > 5) {
+			return ""
+		}
+		Version := string(b[1:5])
+		switch Version {
+		case "Q046":
+		case "Q050":
+			return "" //TODO
+		default:
+			return ""
+		}
+		if !(len(b) > 31 && b[30] == 0xa0) {
+			return ""
+		}
+
+		if !(len(b) > 42 && string(b[34:38]) == "CHLO") {
+			return ""
+		}
+		TagNum := int(binary.LittleEndian.Uint16(b[38:40]))
+
+		BaseOffset := 42 + 8*TagNum
+		if !(len(b) > BaseOffset) {
+			return ""
+		}
+
+		var SNIOffset uint16 = 0
+		for i := 0; i < TagNum; i++ {
+			offset := 42 + i*8
+			TagName := b[offset : offset+4]
+			OffsetEnd := binary.LittleEndian.Uint16(b[offset+4 : offset+6])
+			if bytes.Equal(TagName, []byte{'S', 'N', 'I', 0}) {
+				if len(b[BaseOffset:]) < int(OffsetEnd) {
+					return ""
+				}
+				return string(b[BaseOffset:][SNIOffset:OffsetEnd])
+			} else {
+				SNIOffset = OffsetEnd
+			}
+		}
+	}
+
+	return ""
+}
+
 func HttpMove(conn net.Conn, host string, b []byte) bool {
 	data := make([]byte, 1460)
 	n := 0
 	if host == "" {
 		copy(data[:], []byte("HTTP/1.1 200 OK"))
 		n += 15
-	} else if host == "https" {
+	} else if host == "https" || host == "h3" {
 		copy(data[:], []byte("HTTP/1.1 302 Found\r\nLocation: https://"))
 		n += 38
 
@@ -257,13 +386,30 @@ func HttpMove(conn net.Conn, host string, b []byte) bool {
 		n += end - start
 	}
 
-	copy(data[n:], []byte("\r\nCache-Control: private\r\nServer: pinocchio\r\nContent-Length: 0\r\n\r\n"))
-	n += 66
+	cache_control := []byte("\r\nCache-Control: private")
+	copy(data[n:], cache_control)
+	n += len(cache_control)
+
+	if host == "h3" {
+		alt_svc := []byte("\r\nAlt-Svc: h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000; persist=1")
+		copy(data[n:], alt_svc)
+		n += len(alt_svc)
+	}
+
+	content_length := []byte("\r\nContent-Length: 0\r\n\r\n")
+	copy(data[n:], content_length)
+	n += len(content_length)
+
 	conn.Write(data[:n])
 	return true
 }
 
-func DialStrip(host string, fronting string) (*tls.Conn, error) {
+func (pface *PhantomInterface) DialStrip(host string, fronting string) (*tls.Conn, error) {
+	addr, err := pface.ResolveTCPAddr(host, 443)
+	if err != nil {
+		return nil, err
+	}
+
 	var conf *tls.Config
 	if fronting == "" {
 		conf = &tls.Config{
@@ -276,8 +422,7 @@ func DialStrip(host string, fronting string) (*tls.Conn, error) {
 		}
 	}
 
-	conn, err := tls.Dial("tcp", net.JoinHostPort(host, "443"), conf)
-	return conn, err
+	return tls.Dial("tcp", addr.String(), conf)
 }
 
 func getMyIPv6() net.IP {
@@ -298,11 +443,7 @@ func getMyIPv6() net.IP {
 	return nil
 }
 
-func Init() {
-	DomainMap = make(map[string]Config)
-}
-
-func LoadConfig(filename string) error {
+func LoadProfile(filename string) error {
 	conf, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -311,14 +452,12 @@ func LoadConfig(filename string) error {
 
 	br := bufio.NewReader(conf)
 
-	var option uint32 = 0
-	var minTTL byte = 0
-	var maxTTL byte = 0
-	var syncMSS uint16 = 0
-	server := ""
-	device := ""
+	default_interface, ok := InterfaceMap["default"]
+	if ok {
+		DefaultInterface = &default_interface
+	}
+	var CurrentInterface *PhantomInterface = &PhantomInterface{}
 
-	DNS = ""
 	for {
 		line, _, err := br.ReadLine()
 		if err == io.EOF {
@@ -330,142 +469,101 @@ func LoadConfig(filename string) error {
 				l := strings.SplitN(string(line), "#", 2)[0]
 				keys := strings.SplitN(l, "=", 2)
 				if len(keys) > 1 {
-					if keys[0] == "server" {
-						if DNS == "" {
-							DNS = keys[1]
-						}
-						server = keys[1]
+					if keys[0] == "dns-min-ttl" {
 						logPrintln(2, string(line))
-					} else if keys[0] == "dns-min-ttl" {
 						ttl, err := strconv.Atoi(keys[1])
 						if err != nil {
 							log.Println(string(line), err)
 							return err
 						}
 						DNSMinTTL = uint32(ttl)
-						logPrintln(2, string(line))
-					} else if keys[0] == "method" {
-						option = OPT_NONE
-						methods := strings.Split(keys[1], ",")
-						for _, m := range methods {
-							method, ok := MethodMap[m]
-							if ok {
-								option |= method
-							} else {
-								logPrintln(1, "unsupported method: "+m)
-							}
-						}
-						logPrintln(2, string(line))
-					} else if keys[0] == "ttl" {
-						ttl, err := strconv.Atoi(keys[1])
-						if err != nil {
-							log.Println(string(line), err)
-							return err
-						}
-						minTTL = byte(ttl)
-						logPrintln(2, string(line))
-					} else if keys[0] == "mss" {
-						mss, err := strconv.Atoi(keys[1])
-						if err != nil {
-							log.Println(string(line), err)
-							return err
-						}
-						syncMSS = uint16(mss)
-						logPrintln(2, string(line))
-					} else if keys[0] == "max-ttl" {
-						ttl, err := strconv.Atoi(keys[1])
-						if err != nil {
-							log.Println(string(line), err)
-							return err
-						}
-						maxTTL = byte(ttl)
-						logPrintln(2, string(line))
-					} else if keys[0] == "device" {
-						if keys[1] == "default" {
-							device = ""
-						} else {
-							device = keys[1]
-						}
-						logPrintln(2, string(line))
 					} else if keys[0] == "subdomain" {
 						SubdomainDepth, err = strconv.Atoi(keys[1])
 						if err != nil {
 							log.Println(string(line), err)
 							return err
 						}
-					} else if keys[0] == "tcpmapping" {
-						mapping := strings.SplitN(keys[1], ">", 2)
-						go TCPMapping(mapping[0], mapping[1])
 					} else if keys[0] == "udpmapping" {
 						mapping := strings.SplitN(keys[1], ">", 2)
 						go UDPMapping(mapping[0], mapping[1])
 					} else {
-						ip := net.ParseIP(keys[0])
-						var RecordA DomainIP
-						var RecordAAAA DomainIP
 						if strings.HasPrefix(keys[1], "[") {
-							var ok bool
-							result, ok := ACache.Load(keys[1][1 : len(keys[1])-1])
+							quote := keys[1][1 : len(keys[1])-1]
+							result, hasCache := DNSCache.Load(quote)
+							if hasCache {
+								records := result.(*DNSRecords)
+								DNSCache.Store(keys[0], records)
+							}
+							s, ok := DefaultProfile.DomainMap[quote]
 							if ok {
-								RecordA = result.(DomainIP)
-							} else {
-								result, ok = AAAACache.Load(keys[1][1 : len(keys[1])-1])
-								if ok {
-									RecordAAAA = result.(DomainIP)
-								}
+								DefaultProfile.DomainMap[keys[0]] = s
 							}
-							if !ok {
-								DomainMap[keys[0]] = Config{option, minTTL, maxTTL, syncMSS, server, device}
-								return nil
-							}
+							continue
 						} else {
-							index := 0
-							if option != 0 {
-								index = len(Nose)
+							ip := net.ParseIP(keys[0])
+							var records *DNSRecords
+							records = new(DNSRecords)
+							if CurrentInterface.Hint&HINT_MODIFY != 0 || CurrentInterface.Protocol != 0 {
+								records.Index = uint32(len(Nose))
+								records.ALPN = CurrentInterface.Hint & HINT_DNS
 								Nose = append(Nose, keys[0])
 							}
-							RecordA.Index = index
-							ips := strings.Split(keys[1], ",")
-							for i := 0; i < len(ips); i++ {
-								ip := net.ParseIP(ips[i])
-								if ip == nil {
-									log.Println(ips[i], "bad ip")
-								}
-								ip4 := ip.To4()
-								if ip4 != nil {
-									RecordA.Addresses = append(RecordA.Addresses, ip4)
-								} else {
-									RecordAAAA.Addresses = append(RecordAAAA.Addresses, ip)
-								}
-							}
-						}
 
-						if ip == nil {
-							DomainMap[keys[0]] = Config{option, minTTL, maxTTL, syncMSS, server, device}
-							ACache.Store(keys[0], RecordA)
-							AAAACache.Store(keys[0], RecordAAAA)
-							if option&OPT_HTTPS != 0 {
-								if option&OPT_IPV6 == 0 {
-									HTTPSCache.Store(keys[0], RecordA)
+							addrs := strings.Split(keys[1], ",")
+							for i := 0; i < len(addrs); i++ {
+								ip := net.ParseIP(addrs[i])
+								if ip == nil {
+									result, hasCache := DNSCache.Load(addrs[i])
+									if hasCache {
+										r := result.(*DNSRecords)
+										if r.IPv4Hint != nil {
+											if records.IPv4Hint == nil {
+												records.IPv4Hint = new(RecordAddresses)
+											}
+											records.IPv4Hint.Addresses = append(records.IPv4Hint.Addresses, r.IPv4Hint.Addresses...)
+										}
+										if r.IPv6Hint != nil {
+											if records.IPv6Hint == nil {
+												records.IPv6Hint = new(RecordAddresses)
+											}
+											records.IPv6Hint.Addresses = append(records.IPv6Hint.Addresses, r.IPv6Hint.Addresses...)
+										}
+									} else {
+										log.Println(keys[0], addrs[i], "bad address")
+									}
 								} else {
-									HTTPSCache.Store(keys[0], RecordAAAA)
+									ip4 := ip.To4()
+									if ip4 != nil {
+										if records.IPv4Hint == nil {
+											records.IPv4Hint = new(RecordAddresses)
+										}
+										records.IPv4Hint.Addresses = append(records.IPv4Hint.Addresses, ip4)
+									} else {
+										if records.IPv6Hint == nil {
+											records.IPv6Hint = new(RecordAddresses)
+										}
+										records.IPv6Hint.Addresses = append(records.IPv6Hint.Addresses, ip)
+									}
 								}
-							} else {
-								HTTPSCache.Store(keys[0], DomainIP{0, 0, nil})
 							}
-						} else {
-							DomainMap[ip.String()] = Config{option, minTTL, maxTTL, syncMSS, server, device}
-							ACache.Store(ip.String(), RecordA)
-							AAAACache.Store(ip.String(), RecordAAAA)
+
+							if ip == nil {
+								DefaultProfile.DomainMap[keys[0]] = CurrentInterface
+								DNSCache.Store(keys[0], records)
+							} else {
+								DefaultProfile.DomainMap[ip.String()] = CurrentInterface
+								DNSCache.Store(ip.String(), records)
+							}
 						}
 					}
 				} else {
-					addr, err := net.ResolveTCPAddr("tcp", keys[0])
-					if err != nil {
-						if server == "" && option == 0 {
-							ACache.Store(keys[0], DomainIP{0, 0, nil})
-							AAAACache.Store(keys[0], DomainIP{0, 0, nil})
+					if keys[0][0] == '[' {
+						face, ok := InterfaceMap[keys[0][1:len(keys[0])-1]]
+						if ok {
+							CurrentInterface = &face
+							logPrintln(1, keys[0], CurrentInterface)
 						} else {
+<<<<<<< HEAD
 							DomainMap[keys[0]] = Config{option, minTTL, maxTTL, syncMSS, server, device}
 							// thphd 20211105: allow resolution of domains that are
 							// not present in default.conf
@@ -473,15 +571,32 @@ func LoadConfig(filename string) error {
 								fmt.Println(keys[0], "used as default_config. ")
 								default_config = DomainMap[keys[0]]
 							}
+=======
+							logPrintln(1, keys[0], "invalid interface")
+>>>>>>> 14291e2c889efb4fba5ead598acbb31d0077f948
 						}
 					} else {
-						if strings.Index(keys[0], "/") > 0 {
+						addr, err := net.ResolveTCPAddr("tcp", keys[0])
+						if err == nil {
+							DefaultProfile.DomainMap[addr.String()] = CurrentInterface
+						} else {
 							_, ipnet, err := net.ParseCIDR(keys[0])
 							if err == nil {
-								DomainMap[ipnet.String()] = Config{option, minTTL, maxTTL, syncMSS, server, device}
+								DefaultProfile.DomainMap[ipnet.String()] = CurrentInterface
+							} else {
+								ip := net.ParseIP(keys[0])
+								if ip != nil {
+									DefaultProfile.DomainMap[ip.String()] = CurrentInterface
+								} else {
+									if CurrentInterface.DNS != "" || CurrentInterface.Protocol != 0 {
+										DefaultProfile.DomainMap[keys[0]] = CurrentInterface
+										records := new(DNSRecords)
+										DNSCache.Store(keys[0], records)
+									} else {
+										DefaultProfile.DomainMap[keys[0]] = nil
+									}
+								}
 							}
-						} else {
-							DomainMap[addr.IP.String()] = Config{option, minTTL, maxTTL, syncMSS, server, device}
 						}
 					}
 				}
@@ -518,12 +633,10 @@ func LoadHosts(filename string) error {
 
 		k := strings.SplitN(string(line), "\t", 2)
 		if len(k) == 2 {
+			var records *DNSRecords
+
 			name := k[1]
-			_, ok := ACache.Load(name)
-			if ok {
-				continue
-			}
-			_, ok = AAAACache.Load(name)
+			_, ok := DNSCache.Load(name)
 			if ok {
 				continue
 			}
@@ -534,23 +647,20 @@ func LoadHosts(filename string) error {
 					break
 				}
 				offset += off
-				result, ok := ACache.Load(name[offset:])
+				result, ok := DNSCache.Load(name[offset:])
 				if ok {
-					ACache.Store(name, result.(DomainIP))
-					continue
-				}
-				result, ok = AAAACache.Load(name[offset:])
-				if ok {
-					AAAACache.Store(name, result.(DomainIP))
+					records = new(DNSRecords)
+					*records = *result.(*DNSRecords)
+					DNSCache.Store(name, records)
 					continue
 				}
 				offset++
 			}
 
-			conf, ok := ConfigLookup(name)
-			index := 0
-			if ok && conf.Option != 0 {
-				index = len(Nose)
+			server := DefaultProfile.GetInterface(name)
+			if ok && server.Hint != 0 {
+				records.Index = uint32(len(Nose))
+				records.ALPN = server.Hint & HINT_DNS
 				Nose = append(Nose, name)
 			}
 			ip := net.ParseIP(k[0])
@@ -560,11 +670,9 @@ func LoadHosts(filename string) error {
 			}
 			ip4 := ip.To4()
 			if ip4 != nil {
-				ACache.Store(name, DomainIP{index, 0, []net.IP{ip4}})
-				AAAACache.Store(name, DomainIP{0, 0, nil})
+				records.IPv4Hint = &RecordAddresses{0x7FFFFFFFFFFFFFFF, []net.IP{ip4}}
 			} else {
-				AAAACache.Store(name, DomainIP{index, 0, []net.IP{ip}})
-				ACache.Store(name, DomainIP{0, 0, nil})
+				records.IPv6Hint = &RecordAddresses{0x7FFFFFFFFFFFFFFF, []net.IP{ip}}
 			}
 		}
 	}
@@ -574,7 +682,7 @@ func LoadHosts(filename string) error {
 
 func GetPAC(address string) string {
 	rule := ""
-	for host := range DomainMap {
+	for host := range DefaultProfile.DomainMap {
 		rule += fmt.Sprintf("\"%s\":1,\n", host)
 	}
 	Context := `var proxy = 'SOCKS %s';
@@ -595,4 +703,78 @@ function FindProxyForURL(url, host) {
 }
 `
 	return fmt.Sprintf(Context, address, rule, SubdomainDepth)
+}
+
+var InterfaceMap map[string]PhantomInterface
+
+func CreateInterfaces(Interfaces []InterfaceConfig) []string {
+	DefaultProfile = &PhantomProfile{make(map[string]*PhantomInterface)}
+	InterfaceMap = make(map[string]PhantomInterface)
+
+	contains := func(a []string, x string) bool {
+		for _, n := range a {
+			if x == n {
+				return true
+			}
+		}
+		return false
+	}
+
+	var devices []string
+	for _, pface := range Interfaces {
+		var Hint uint32 = HINT_NONE
+		for _, h := range strings.Split(pface.Hint, ",") {
+			if h != "" {
+				hint, ok := HintMap[h]
+				if ok {
+					Hint |= hint
+				} else {
+					logPrintln(1, "unsupported hint: "+h)
+				}
+			}
+		}
+
+		var protocol byte
+		switch pface.Protocol {
+		case "direct":
+			protocol = DIRECT
+		case "redirect":
+			protocol = REDIRECT
+		case "nat64":
+			protocol = NAT64
+		case "http":
+			protocol = HTTP
+		case "https":
+			protocol = HTTPS
+		case "socks4":
+			protocol = SOCKS4
+		case "socks5":
+			protocol = SOCKS5
+		case "socks":
+			protocol = SOCKS5
+		}
+
+		_, ok := InterfaceMap[pface.Device]
+		if !ok {
+			if pface.Device != "" && Hint != 0 && !contains(devices, pface.Device) {
+				devices = append(devices, pface.Device)
+			}
+		}
+
+		InterfaceMap[pface.Name] = PhantomInterface{
+			Device: pface.Device,
+			DNS:    pface.DNS,
+			Hint:   Hint,
+			MTU:    uint16(pface.MTU),
+			TTL:    byte(pface.TTL),
+			MAXTTL: byte(pface.MAXTTL),
+
+			Protocol: protocol,
+			Address:  pface.Address,
+		}
+	}
+	logPrintln(1, InterfaceMap)
+
+	go ConnectionMonitor(devices)
+	return devices
 }

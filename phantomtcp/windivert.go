@@ -1,5 +1,5 @@
-// +build windows
-// +build windivert
+//go:build windows && windivert
+// +build windows,windivert
 
 package phantomtcp
 
@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +16,48 @@ import (
 	"github.com/macronut/godivert"
 )
 
+var HintMap = map[string]uint32{
+	"none": HINT_NONE,
+
+	"http":  HINT_HTTP,
+	"https": HINT_HTTPS,
+	"h3":    HINT_HTTP3,
+
+	"ipv4": HINT_IPV4,
+	"ipv6": HINT_IPV6,
+
+	"move":     HINT_MOVE,
+	"strip":    HINT_STRIP,
+	"fronting": HINT_FRONTING,
+
+	"ttl":    HINT_TTL,
+	"mss":    HINT_MSS,
+	"w-md5":  HINT_WMD5,
+	"n-ack":  HINT_NACK,
+	"w-ack":  HINT_WACK,
+	"w-csum": HINT_WCSUM,
+	"w-seq":  HINT_WSEQ,
+	"w-time": HINT_WTIME,
+
+	"tfo":    HINT_TFO,
+	"udp":    HINT_UDP,
+	"no-tcp": HINT_NOTCP,
+	"delay":  HINT_DELAY,
+
+	"mode2":      HINT_MODE2,
+	"df":         HINT_DF,
+	"sat":        HINT_SAT,
+	"rand":       HINT_RAND,
+	"s-seg":      HINT_SSEG,
+	"1-seg":      HINT_1SEG,
+	"half-tfo":   HINT_HTFO,
+	"keep-alive": HINT_KEEPALIVE,
+	"synx2":      HINT_SYNX2,
+	"zero":       HINT_ZERO,
+}
+
+var ConnWait4 [65536]uint32
+var ConnWait6 [65536]uint32
 var winDivertLock sync.Mutex
 var winDivert *godivert.WinDivertHandle
 
@@ -59,10 +100,10 @@ func connectionMonitor(layer uint8) {
 		case *layers.IPv4:
 			var srcPort layers.TCPPort
 			var synAddr string
-			var method uint32 = 0
+			var hint uint32 = 0
 			if synack {
-				method = ConnWait4[tcp.DstPort]
-				if method == 0 {
+				hint = ConnWait4[tcp.DstPort]
+				if hint == 0 {
 					winDivert.Send(divertpacket)
 					continue
 				}
@@ -76,11 +117,11 @@ func connectionMonitor(layer uint8) {
 				result, ok := ConnSyn.Load(synAddr)
 				if ok {
 					info := result.(SynInfo)
-					method = info.Option
+					hint = info.Option
 				}
 			}
 
-			if method != 0 {
+			if hint != 0 {
 				if synack {
 					srcIP := ip.DstIP
 					ip.DstIP = ip.SrcIP
@@ -97,9 +138,9 @@ func connectionMonitor(layer uint8) {
 				ch := ConnInfo4[srcPort]
 				connInfo := &ConnectionInfo{nil, ip, *tcp}
 
-				if method&(OPT_TFO|OPT_HTFO|OPT_SYNX2) != 0 {
+				if hint&(HINT_TFO|HINT_HTFO|HINT_SYNX2) != 0 {
 					if synack {
-						if method&(OPT_TFO|OPT_HTFO) != 0 {
+						if hint&(HINT_TFO|HINT_HTFO) != 0 {
 							for _, op := range tcp.Options {
 								if op.OptionType == 34 {
 									TFOCookies.Store(ip.DstIP.String(), op.OptionData)
@@ -107,10 +148,10 @@ func connectionMonitor(layer uint8) {
 							}
 						}
 						ConnWait4[srcPort] = 0
-					} else if method&(OPT_TFO|OPT_HTFO) != 0 {
+					} else if hint&(HINT_TFO|HINT_HTFO) != 0 {
 						if ip.TTL < 128 {
 							count := 1
-							if method&OPT_SYNX2 != 0 {
+							if hint&HINT_SYNX2 != 0 {
 								count = 2
 							}
 
@@ -120,18 +161,18 @@ func connectionMonitor(layer uint8) {
 								payload := TFOPayload[tfo_id]
 								if payload != nil {
 									ip.TOS = 0
-									ModifyAndSendPacket(connInfo, payload, OPT_TFO, 0, count)
-									ConnWait4[srcPort] = method
+									ModifyAndSendPacket(connInfo, payload, HINT_TFO, 0, count)
+									ConnWait4[srcPort] = hint
 								} else {
 									connInfo = nil
 								}
 							} else {
 								ip.TOS = 0
-								ModifyAndSendPacket(connInfo, nil, OPT_TFO, 0, count)
+								ModifyAndSendPacket(connInfo, nil, HINT_TFO, 0, count)
 								connInfo = nil
 							}
 						}
-					} else if method&OPT_SYNX2 != 0 {
+					} else if hint&HINT_SYNX2 != 0 {
 						winDivert.Send(divertpacket)
 						SendPacket(packet)
 					}
@@ -151,10 +192,10 @@ func connectionMonitor(layer uint8) {
 		case *layers.IPv6:
 			var srcPort layers.TCPPort
 			var synAddr string
-			var method uint32 = 0
+			var hint uint32 = 0
 			if synack {
-				method = ConnWait6[tcp.DstPort]
-				if method == 0 {
+				hint = ConnWait6[tcp.DstPort]
+				if hint == 0 {
 					winDivert.Send(divertpacket)
 					continue
 				}
@@ -168,10 +209,10 @@ func connectionMonitor(layer uint8) {
 				result, ok := ConnSyn.Load(synAddr)
 				if ok {
 					info := result.(SynInfo)
-					method = info.Option
+					hint = info.Option
 				}
 			}
-			if method != 0 {
+			if hint != 0 {
 				if synack {
 					srcIP := ip.DstIP
 					ip.DstIP = ip.SrcIP
@@ -188,9 +229,9 @@ func connectionMonitor(layer uint8) {
 				ch := ConnInfo6[srcPort]
 				connInfo := &ConnectionInfo{nil, ip, *tcp}
 
-				if method&(OPT_TFO|OPT_HTFO|OPT_SYNX2) != 0 {
+				if hint&(HINT_TFO|HINT_HTFO|HINT_SYNX2) != 0 {
 					if synack {
-						if method&(OPT_TFO|OPT_HTFO) != 0 {
+						if hint&(HINT_TFO|HINT_HTFO) != 0 {
 							for _, op := range tcp.Options {
 								if op.OptionType == 34 {
 									TFOCookies.Store(ip.DstIP.String(), op.OptionData)
@@ -198,10 +239,10 @@ func connectionMonitor(layer uint8) {
 							}
 						}
 						ConnWait6[srcPort] = 0
-					} else if method&(OPT_TFO|OPT_HTFO) != 0 {
+					} else if hint&(HINT_TFO|HINT_HTFO) != 0 {
 						if ip.HopLimit < 128 {
 							count := 1
-							if method&OPT_SYNX2 != 0 {
+							if hint&HINT_SYNX2 != 0 {
 								count = 2
 							}
 
@@ -211,18 +252,18 @@ func connectionMonitor(layer uint8) {
 								payload := TFOPayload[tfo_id]
 								if payload != nil {
 									ip.TrafficClass = 0
-									ModifyAndSendPacket(connInfo, payload, OPT_TFO, 0, count)
-									ConnWait4[srcPort] = method
+									ModifyAndSendPacket(connInfo, payload, HINT_TFO, 0, count)
+									ConnWait4[srcPort] = hint
 								} else {
 									connInfo = nil
 								}
 							} else {
 								ip.TrafficClass = 0
-								ModifyAndSendPacket(connInfo, nil, OPT_TFO, 0, count)
+								ModifyAndSendPacket(connInfo, nil, HINT_TFO, 0, count)
 								connInfo = nil
 							}
 						}
-					} else if method&OPT_SYNX2 != 0 {
+					} else if hint&HINT_SYNX2 != 0 {
 						winDivert.Send(divertpacket)
 						SendPacket(packet)
 					}
@@ -256,10 +297,6 @@ func ConnectionMonitor(devices []string) bool {
 	return true
 }
 
-func UDPMonitor(devices []string) bool {
-	return true
-}
-
 func SendPacket(packet gopacket.Packet) error {
 	payload := packet.LinkLayer().LayerPayload()
 
@@ -274,11 +311,11 @@ func SendPacket(packet gopacket.Packet) error {
 	return err
 }
 
-func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32, ttl uint8, count int) error {
+func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, hint uint32, ttl uint8, count int) error {
 	ipLayer := connInfo.IP
 
 	var tcpLayer *layers.TCP
-	if method&OPT_TFO != 0 {
+	if hint&HINT_TFO != 0 {
 		tcpLayer = &connInfo.TCP
 
 		tcpLayer.Seq -= uint32(len(payload))
@@ -315,21 +352,21 @@ func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32
 			Window:     connInfo.TCP.Window,
 		}
 
-		if method&OPT_WMD5 != 0 {
+		if hint&HINT_WMD5 != 0 {
 			tcpLayer.Options = []layers.TCPOption{
 				layers.TCPOption{19, 16, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
 			}
-		} else if method&OPT_WTIME != 0 {
+		} else if hint&HINT_WTIME != 0 {
 			tcpLayer.Options = []layers.TCPOption{
 				layers.TCPOption{8, 8, []byte{0, 0, 0, 0, 0, 0, 0, 0}},
 			}
 		}
 	}
 
-	if method&OPT_NACK != 0 {
+	if hint&HINT_NACK != 0 {
 		tcpLayer.ACK = false
 		tcpLayer.Ack = 0
-	} else if method&OPT_WACK != 0 {
+	} else if hint&HINT_WACK != 0 {
 		tcpLayer.Ack += uint32(tcpLayer.Window)
 	}
 
@@ -338,11 +375,11 @@ func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32
 	var options gopacket.SerializeOptions
 	options.FixLengths = true
 
-	if method&OPT_WCSUM == 0 {
+	if hint&HINT_WCSUM == 0 {
 		options.ComputeChecksums = true
 	}
 
-	if method&OPT_WSEQ != 0 {
+	if hint&HINT_WSEQ != 0 {
 		tcpLayer.Seq--
 		fakepayload := make([]byte, len(payload)+1)
 		fakepayload[0] = 0xFF
@@ -354,14 +391,14 @@ func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32
 
 	switch ip := ipLayer.(type) {
 	case *layers.IPv4:
-		if method&OPT_TTL != 0 {
+		if hint&HINT_TTL != 0 {
 			ip.TTL = ttl
 		}
 		gopacket.SerializeLayers(buffer, options,
 			ip, tcpLayer, gopacket.Payload(payload),
 		)
 	case *layers.IPv6:
-		if method&OPT_TTL != 0 {
+		if hint&HINT_TTL != 0 {
 			ip.HopLimit = ttl
 		}
 		gopacket.SerializeLayers(buffer, options,
@@ -387,46 +424,74 @@ func ModifyAndSendPacket(connInfo *ConnectionInfo, payload []byte, method uint32
 	return nil
 }
 
-func SendJumboUDPPacket(laddr, raddr *net.UDPAddr, payload []byte) error {
-	return nil
-}
-
 func Redirect(dst string, to_port int, forward bool) {
 	if dst == "" {
 		return
 	}
-	var filter string
-	var layer uint8
 
 	var dstfilter string
-	iprange := strings.SplitN(dst, "-", 2)
-	logPrintln(1, dst)
-	if len(iprange) > 1 {
-		dstfilter = fmt.Sprintf("ip.DstAddr>=%s and ip.DstAddr<=%s and tcp", iprange[0], iprange[1])
+	dstip := net.ParseIP(dst).To4()
+	if dstip == nil {
+		return
+	}
+
+	if dstip[2] == 0 && dstip[3] == 0 {
+		dstfilter = fmt.Sprintf("ip.DstAddr>=%d.%d.0.0 and ip.DstAddr<%d.%d.255.255 and tcp", dstip[0], dstip[1], dstip[0], dstip[1])
 	} else {
 		dstfilter = fmt.Sprintf("ip.DstAddr=%s and tcp", dst)
 	}
 
-	if forward {
-		filter = fmt.Sprintf("(%s) or (ip.SrcAddr>127.255.0.0 and ip.SrcAddr<127.255.255.255 and tcp.SrcPort=%s)", dstfilter, strconv.Itoa(to_port))
-		layer = 1
-	} else {
-		filter = fmt.Sprintf("(outbound and %s) or (ip.SrcAddr>127.255.0.0 and ip.SrcAddr<127.255.255.255 and tcp.SrcPort=%s)", dstfilter, strconv.Itoa(to_port))
-		layer = 0
-	}
+	logPrintln(1, dstfilter)
+
+	filter := fmt.Sprintf("(outbound and %s) or (ip.SrcAddr>127.255.0.0 and ip.SrcAddr<127.255.255.255 and tcp.SrcPort=%s)", dstfilter, strconv.Itoa(to_port))
 
 	winDivertLock.Lock()
-	winDivert, err := godivert.WinDivertOpen(filter, layer, 0, 0)
+	winDivertLocal, err := godivert.WinDivertOpen(filter, 0, 0, 0)
 	winDivertLock.Unlock()
 	if err != nil {
 		fmt.Printf("winDivert open failed: %v with %s", err, filter)
 		return
 	}
-	defer winDivert.Close()
+	defer winDivertLocal.Close()
+
+	var winDivertForward *godivert.WinDivertHandle
+	if forward {
+		winDivertLock.Lock()
+		forwardfilter := fmt.Sprintf("(%s) and (ip.SrcAddr>192.168.137.0 and ip.SrcAddr<192.168.137.255)", dstfilter)
+		winDivertForward, err = godivert.WinDivertOpen(forwardfilter, 1, 0, 0)
+		winDivertLock.Unlock()
+		if err != nil {
+			fmt.Printf("winDivert open failed: %v with %s", err, forwardfilter)
+			return
+		}
+
+		go func() {
+			defer winDivertForward.Close()
+
+			for {
+				packet, err := winDivertForward.Recv()
+				if err != nil {
+					logPrintln(1, err)
+					continue
+				}
+
+				srcIP := packet.SrcIP().To4()
+				dstIP := packet.DstIP().To4()
+				dstPort, _ := packet.DstPort()
+
+				packet.SetSrcIP(net.IPv4(127, srcIP[3], byte(dstPort>>8), byte(dstPort&0xFF)))
+				packet.SetDstIP(net.IPv4(127, 255, dstIP[2], dstIP[3]))
+				packet.SetDstPort(uint16(to_port))
+
+				packet.CalcNewChecksum(winDivertLocal)
+				winDivertLocal.Send(packet)
+			}
+		}()
+	}
 
 	var localIP net.IP
 	for {
-		packet, err := winDivert.Recv()
+		packet, err := winDivertLocal.Recv()
 		if err != nil {
 			logPrintln(1, err)
 			continue
@@ -434,12 +499,16 @@ func Redirect(dst string, to_port int, forward bool) {
 
 		srcIP := packet.SrcIP().To4()
 		dstIP := packet.DstIP().To4()
-
 		dstPort, _ := packet.DstPort()
-		if srcIP[0] == 127 && srcIP[1] == 255 && dstIP[0] == 127 && dstIP[1] == 0 {
-			packet.SetSrcIP(net.IPv4(6, 0, srcIP[2], srcIP[3]))
-			packet.SetDstIP(localIP)
+
+		if srcIP[0] == 127 && dstIP[0] == 127 {
+			packet.SetSrcIP(net.IPv4(dstip[0], dstip[1], srcIP[2], srcIP[3]))
 			packet.SetSrcPort(uint16(dstIP[2])<<8 | uint16(dstIP[3]))
+			if dstIP[1] > 1 {
+				packet.SetDstIP(net.IPv4(192, 168, 137, dstIP[1]))
+			} else if forward {
+				packet.SetDstIP(localIP)
+			}
 		} else {
 			localIP = srcIP.To16()
 			packet.SetSrcIP(net.IPv4(127, 0, byte(dstPort>>8), byte(dstPort&0xFF)))
@@ -447,8 +516,8 @@ func Redirect(dst string, to_port int, forward bool) {
 			packet.SetDstPort(uint16(to_port))
 		}
 
-		packet.CalcNewChecksum(winDivert)
-		winDivert.Send(packet)
+		packet.CalcNewChecksum(winDivertLocal)
+		winDivertLocal.Send(packet)
 	}
 }
 
@@ -479,22 +548,17 @@ func RedirectDNS() {
 		}
 		udpheadlen := 8
 		request := packet.Raw[ipheadlen+udpheadlen:]
-		qname, qtype, _ := GetQName(request)
+
+		qname, _, _ := GetQName(request)
 		if qname == "" {
 			logPrintln(2, "DNS Segmentation fault")
 			continue
 		}
 
-		conf, ok := ConfigLookup(qname)
-		if ok {
-			index, _ := NSLookup(qname, conf.Option, conf.Server)
-
-			var response []byte
-			if qtype == 28 {
-				response = BuildResponse(request, qtype, 0, nil)
-			} else {
-				response = BuildLie(request, qtype, index)
-			}
+		server := DefaultProfile.GetInterface(qname)
+		if server != nil {
+			logPrintln(1, qname, server)
+			_, response := NSRequest(request, true)
 			udpsize := len(response) + 8
 
 			var packetsize int

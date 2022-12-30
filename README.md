@@ -1,91 +1,169 @@
 # phantomsocks
+<<<<<<< HEAD
 A proxy server for Linux/Windows/macOS with Pcap/RawSocket/WinDivert to modify packets
 
 这是thphd的修改增强版。详情见 <https://2047.name/t/16729>
 
 
+=======
+A cross-platform proxy client/server for Linux/Windows/macOS with Pcap/RawSocket/WinDivert
+>>>>>>> 14291e2c889efb4fba5ead598acbb31d0077f948
 ## Usage
 ```
-phantomsocks
-  -c string
-    	Config (default "default.conf")
-  -device string
-    	Device
-  -dns string
-    	DNS
-  -hosts string
-    	Hosts
+./phantomsocks -h
+Usage of ./phantomsocks:
   -log int
     	LogLevel
-  -pac string
-    	PACServer
-  -sni string
-    	SNIProxy
-  -socks string
-    	Socks proxy
-  -redir string
-      Netfilter TCP redirect
-  -proxy string
-      Set system proxy
+  -maxprocs int
+    	MaxProcesses
+  -install
+    	Install service (Windows)
+  -remove
+    	Remove service (Windows)
+  -start
+    	Start service (Windows)
+  -stop
+    	Stop service (Windows)
 ```
-### Socks5:
+## Configure
+### config.json:
 ```
-Linux(pcap&rawsocket):
-sudo ./phantomsocks -device eth0 -socks 0.0.0.0:1080
-
-Windows(windivert):
-phantomsocks -socks 0.0.0.0:1080
+{
+    "vaddrprefix": 6,
+    "proxy": "socks://address:port",
+    "profiles": ["1.conf", "2.conf", "3.conf"],
+    "services": [
+        {
+            "name": "dns",
+            "protocol": "dns",
+            "address": "127.0.0.1:5353"
+        },
+        {
+            "name": "socks",
+            "protocol": "socks",
+            "address": "127.0.0.1:1081"
+        },
+        {
+            "name": "redirect",
+            "protocol": "redirect",
+            "address": "0.0.0.0:6"
+        },
+        {
+            "name": "tproxy",
+            "protocol": "tproxy",
+            "address": "0.0.0.0:6"
+        }
+    ],
+    "interfaces": [
+        {
+            "name": "default",
+            "dns": "udp://8.8.8.8:53"
+        },
+        {
+            "name": "https",
+            "dns": "udp://8.8.8.8:53",
+            "device": "eth0",
+            "hint": "https"
+        },
+        {
+            "name": "doh",
+            "dns": "https://cloudflare-dns.com/dns-query"
+        },
+        {
+            "name": "dot",
+            "dns": "tls://8.8.8.8:853"
+        },
+        {
+            "name": "ecs",
+            "dns": "udp://8.8.8.8:53/?ecs=35.190.247.1"
+        },
+        {
+            "name": "socks5",
+            "protocol": "socks5",
+            "address": "127.0.0.1:1080"
+        },
+        {
+            "name": "socks4",
+            "dns": "udp://8.8.8.8:53",
+            "protocol": "socks4",
+            "address": "127.0.0.1:1080"
+        }
+    ]
+}
+```
+### Socks:
+```
+Windows:
+config.json:
+    "proxy" :"socks://127.0.0.1:1080/?dns=127.0.0.1",
+    "services": [
+        {
+            "name": "DNS",
+            "protocol": "dns",
+            "address": "127.0.0.1:53"
+        },
+        {
+            "name": "Socks",
+            "protocol": "socks",
+            "address": "127.0.0.1:1080"
+        }
+    ]
 
 macOS:
-./phantomsocks -device en0 -socks 127.0.0.1:1080 -proxy socks://127.0.0.1:1080
+config.json:
+    "proxy": "socks://127.0.0.1:1080",
+    "services": [
+        {
+            "name": "Socks",
+            "protocol": "socks",
+            "address": "127.0.0.1:1080"
+        }
+    ]
 ```
 ### Redirect:
 ```
-Linux(pcap&rawsocket):
+Linux:
 iptables -t nat -A OUTPUT -d 6.0.0.0/8 -p tcp -j REDIRECT --to-port 6
-./phantomsocks -device eth0 -dns :53 -redir :6
+config.json:
+    "vaddrprefix": 6,
+    "services": [
+        {
+            "name": "DNS",
+            "protocol": "dns",
+            "address": "127.0.0.1:53"
+        },
+        {
+            "name": "Redirect",
+            "protocol": "redirect",
+            "address": "0.0.0.0:6"
+        }
+    ]
 
 Windows(windivert):
-./phantomsocks -redir 0.0.0.0:6 -proxy redirect://0.0.0.0:6
+config.json:
+    "vaddrprefix": 6,
+    "proxy": "redirect://0.0.0.0:6",
+    "services": [
+        {
+            "name": "Redirect",
+            "protocol": "redirect",
+            "address": "0.0.0.0:6"
+        }
+    ]
 ```
 
-## Configure
+### Rules
 ```
-  server=*          #domains below will use this DNS or proxy server
-  ttl=*             #the fake tcp packet will use this TTL
-  domain=ip,ip,...  #this domain will use these IPs
-  domain            #this domain will be resolved by DNS
-  ip:port           #this ip:port will send fake packet when creating connection
-  method=*          #the methods to modify TCP
-```
-### server:
-```
-  server=udp://8.8.8.8:53
-  server=tcp://8.8.8.8:53
-  server=tls://8.8.8.8:853
-  server=tfo://8.8.8.8:53 #Linux
+  [default]         #domains below will use the config of this interface
+  domain=ip,ip,...  #this domain will use these IPs
+  domain            #this domain will be resolved by DNS
+  domain=[domain]   #this domain will use the config of this domain
+  domain=domain     #this domain will use the addresses of this domain
   
-  server=udp://8.8.8.8:53/ecs=35.190.247.1
-  server=http://hostname:port                     #http proxy server
-  server=socks://hostname:port                    #socks5 proxy server
-  server=ss://method:password@hostname:port       #Shadowsocks proxy server
-```
-### methods:
-```
-  none              #no modification
-  ttl               #the fake tcp packets will use the TTL you set
-  w-md5             #the fake tcp packets will have a wrong md5 option
-  w-csum            #the fake tcp packets will have a wrong checksum
-  w-ack             #the fake tcp packets will have a wrong ACK number
-  w-seq             #the fake tcp packets will have a wrong SEQ number
-  w-time            #the fake tcp packets will have a wrong timestamp
-  s-seg             #the first tcp payload will be very small
-  tfo               #SYN packet will take a part of data when the server supports TCP Fast Open
-  https             #domains below will be move to https when using http on port 80
-  df                #the true tcp packets will not be fragmented
-  ipv4              #domains below will only connect via ipv4
-  ipv6              #domains below will only connect via ipv6
-  proxy             #domains below will connect via above proxy server
+  [dot]             #domains below will use the config of dot
+  domain
+  [socks5]          #domains below will use the config of socks5
+  domain
 ```
 ## Installation
 go get github.com/macronut/phantomsocks
@@ -99,7 +177,7 @@ go build
 static linking for pcap
 ```
 sudo apt-get install -y libpcap-dev
-go build -ldflags '-extldflags "-static"'
+go build -tags pcap -ldflags '-extldflags "-static"'
 ```
 ### raw socket version
 raw socket is Linux only

@@ -1,11 +1,11 @@
 package phantomtcp
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,123 +96,144 @@ func ListenUDP(address string) (*net.UDPConn, error) {
 	return conn, err
 }
 
-func UDPMapping(Address, Host string) error {
-	client, err := ListenUDP(Address)
-	if err != nil {
-		log.Println(err)
-		return err
+func DialUDP(address string) (net.Conn, error) {
+	_address := strings.SplitN(address, "@", 2)
+	if len(_address) == 2 {
+		str_laddr, err := GetAddressFromInterface(_address[1], IsIPv6(_address[0]))
+		if err != nil {
+			return nil, err
+		}
+		laddr, err := net.ResolveUDPAddr("udp", str_laddr+":0")
+		if err != nil {
+			return nil, err
+		}
+		raddr, err := net.ResolveUDPAddr("udp", _address[0])
+		if err != nil {
+			return nil, err
+		}
+
+		return net.DialUDP("udp", laddr, raddr)
+	} else {
+		return net.Dial("udp", address)
 	}
-	defer client.Close()
+}
 
-	logPrintln(1, "UDPMapping:", Address, Host)
+func UDPMapping(Address string, Target string) error {
+	if len(Target) == 0 {
+		return nil
+	}
 
-	var UDPLock sync.Mutex
-	var UDPMap map[string]net.Conn
-	UDPMap = make(map[string]net.Conn)
-	data := make([]byte, 1500)
+	logPrintln(1, "UDPMapping:", Address, Target)
 
-	for {
-		n, clientAddr, err := client.ReadFromUDP(data)
+	localPort, err := strconv.Atoi(Address)
+	if err == nil {
+		localConn, err := net.ListenUDP("udp", &net.UDPAddr{net.IP{127, 0, 0, 1}, localPort, ""})
+		if err != nil {
+			return err
+		}
+
+		var SrcAddr *net.UDPAddr = nil
+		conn, err := DialUDP(Target)
+		if err != nil {
+			return err
+		}
+
+		go func(raddr **net.UDPAddr, conn net.Conn) {
+			data := make([]byte, 1500)
+			for {
+				n, err := conn.Read(data)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				if *raddr != nil {
+					localConn.WriteToUDP(data[:n], *raddr)
+				}
+			}
+		}(&SrcAddr, conn)
+
+		data := make([]byte, 1500)
+		for {
+			var n int
+			n, SrcAddr, err = localConn.ReadFromUDP(data)
+			if err != nil {
+				SrcAddr = nil
+				log.Println(err)
+				continue
+			}
+			conn.Write(data[:n])
+		}
+	} else {
+		localConn, err := ListenUDP(Address)
 		if err != nil {
 			log.Println(err)
 			return err
 		}
+		defer localConn.Close()
 
-		udpConn, ok := UDPMap[clientAddr.String()]
+		var UDPLock sync.Mutex
+		var UDPMap map[string]net.Conn = make(map[string]net.Conn)
+		data := make([]byte, 1500)
 
-		if ok {
-			udpConn.Write(data[:n])
-		} else {
-			if len(Host) > 0 {
-				_host := strings.SplitN(Host, "@", 2)
-				if len(_host) == 2 {
-					str_laddr, err := GetAddressFromInterface(_host[1], IsIPv6(_host[0]))
-					if err != nil {
-						log.Println(err)
-						continue
-					}
-					laddr, err := net.ResolveUDPAddr("udp", str_laddr+":0")
-					if err != nil {
-						log.Println(err)
-						continue
-					}
-					raddr, err := net.ResolveUDPAddr("udp", _host[0])
-					if err != nil {
-						log.Println(err)
-						continue
-					}
+		for {
+			n, clientAddr, err := localConn.ReadFromUDP(data)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
 
-					laddr.Port = raddr.Port
+			UDPLock.Lock()
+			udpConn, ok := UDPMap[clientAddr.String()]
 
-					logPrintln(1, "[UDP]", clientAddr.String(), _host[0], str_laddr)
-
-					udpConn, err = net.DialUDP("udp", laddr, raddr)
-				} else {
-					logPrintln(1, "[UDP]", clientAddr.String(), Host)
-
-					udpConn, err = net.Dial("udp", Host)
+			if ok {
+				udpConn.Write(data[:n])
+				UDPLock.Unlock()
+			} else {
+				logPrintln(1, "[UDP]", clientAddr.String(), Target)
+				UDPLock.Unlock()
+				remoteConn, err := DialUDP(Target)
+				if err != nil {
+					log.Println(err)
+					continue
 				}
-
+				UDPLock.Lock()
+				UDPMap[clientAddr.String()] = remoteConn
+				_, err = remoteConn.Write(data[:n])
+				UDPLock.Unlock()
 				if err != nil {
 					log.Println(err)
 					continue
 				}
 
-				UDPMap[clientAddr.String()] = udpConn
-				_, err = udpConn.Write(data[:n])
-				if err != nil {
-					log.Println(err)
-					continue
-				}
-
-				go func(clientAddr net.UDPAddr) {
+				go func(clientAddr net.UDPAddr, remoteConn net.Conn) {
 					data := make([]byte, 1500)
-					udpConn.SetReadDeadline(time.Now().Add(time.Minute * 2))
+					remoteConn.SetReadDeadline(time.Now().Add(time.Minute * 2))
 					for {
-						n, err := udpConn.Read(data)
+						n, err := remoteConn.Read(data)
 						if err != nil {
 							UDPLock.Lock()
 							delete(UDPMap, clientAddr.String())
 							UDPLock.Unlock()
-							udpConn.Close()
-
+							remoteConn.Close()
 							return
 						}
-						udpConn.SetReadDeadline(time.Now().Add(time.Minute * 2))
-						client.WriteToUDP(data[:n], &clientAddr)
+						remoteConn.SetReadDeadline(time.Now().Add(time.Minute * 2))
+						localConn.WriteToUDP(data[:n], &clientAddr)
 					}
-				}(*clientAddr)
+				}(*clientAddr, remoteConn)
 			}
 		}
 	}
+
+	return nil
 }
 
-func TCPMapping(Address string, Hosts string) error {
-	serverAddr, err := net.ResolveTCPAddr("tcp", Address)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
-	var l *net.TCPListener
-	if Address[0] == '[' {
-		l, err = net.ListenTCP("tcp6", serverAddr)
-	} else {
-		l, err = net.ListenTCP("tcp", serverAddr)
-	}
-
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	defer l.Close()
-
-	logPrintln(1, "TCPMapping:", Address, Hosts)
+func TCPMapping(Listener net.Listener, Hosts string) error {
+	defer Listener.Close()
 
 	HostList := strings.Split(Hosts, ",")
-
 	for {
-		client, err := l.AcceptTCP()
+		client, err := Listener.Accept()
 		if err != nil {
 			log.Println(err)
 			return err
@@ -225,17 +246,15 @@ func TCPMapping(Address string, Hosts string) error {
 		go func() {
 			remote, err := net.Dial("tcp", Host)
 			if err != nil {
-				fmt.Println(err)
+				logPrintln(1, err)
 				return
 			}
 
 			go io.Copy(client, remote)
 			_, err = io.Copy(remote, client)
 			if err != nil {
-				fmt.Println(err)
 				return
 			}
 		}()
 	}
-	return nil
 }

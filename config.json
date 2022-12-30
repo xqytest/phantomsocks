@@ -1,0 +1,22 @@
+{
+    "config": "default.conf",
+    "vaddrprefix": 6,
+    "services": [
+        {
+            "name": "Socks",
+            "protocol": "socks",
+            "address": "127.0.0.1:1080"
+        }
+    ],
+    "interfaces": [
+        {
+            "name": "default",
+            "dns": "udp://8.8.8.8:53"
+        },
+        {
+            "name": "https",
+            "device": "eth0",
+            "hint": "https"
+        }
+    ]
+}

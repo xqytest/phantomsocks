@@ -1,11 +1,41 @@
 package proxy
 
 import (
+	"bytes"
+	"io/ioutil"
 	"net"
+	"net/url"
 	"syscall"
+	"time"
 )
 
+var SystemProxy string = ""
+
 func SetProxy(dev, address string, state bool) error {
+	u, err := url.Parse(address)
+	if err != nil {
+		return err
+	}
+
+	if state {
+		SystemProxy = address
+		switch u.Scheme {
+		case "dns":
+			go func(nameserver, path string) {
+				resolv_content := []byte("nameserver " + nameserver)
+				for SystemProxy != "" {
+					content, err := ioutil.ReadFile(path)
+					if err == nil && !bytes.Equal(content, resolv_content) {
+						ioutil.WriteFile(path, resolv_content, 0644)
+					}
+					time.Sleep(time.Second * 10)
+				}
+			}(u.Host, u.Path)
+		}
+	} else {
+		SystemProxy = ""
+	}
+
 	return nil
 }
 
@@ -32,4 +62,20 @@ func SetKeepAlive(conn net.Conn) error {
 		}
 	}
 	return nil
+}
+
+func InstallService() {
+}
+
+func RemoveService() {
+}
+
+func StartService() {
+}
+
+func StopService() {
+}
+
+func RunAsService(start func()) bool {
+	return false
 }
